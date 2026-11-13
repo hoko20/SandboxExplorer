@@ -139,6 +139,28 @@ def main() -> int:
     check("Scripts/build_ipa.sh" in workflow, "workflow must call the IPA builder")
     check("actions/upload-artifact@v4" in workflow, "workflow must upload the IPA artifact")
 
+    builder = read(ROOT / "Scripts" / "build_ipa.sh")
+    # The three signing modes must stay in sync between the workflow choices,
+    # the builder's dispatch case, and the helper CLIs. A mismatch silently
+    # produces an unsigned IPA when the user asked for embedded entitlements.
+    expected_modes = {"unsigned", "adhoc", "signed"}
+    workflow_modes = set(re.findall(r"^\s+-\s+(unsigned|adhoc|signed)\s*$", workflow, re.M))
+    check(workflow_modes == expected_modes,
+          f"workflow sign_mode choices must be {sorted(expected_modes)}, got {sorted(workflow_modes)}")
+    check(all(re.search(rf"\b{re.escape(mode)}\b", builder) for mode in expected_modes),
+          "build_ipa.sh must implement all three signing modes")
+    check('CODE_SIGN_ENTITLEMENTS="Config/SandboxExplorer.entitlements"' in builder,
+          "builder must pass CODE_SIGN_ENTITLEMENTS so scoped entitlements land in the signature")
+    check("codesign --force --sign - --entitlements" in builder,
+          "adhoc mode must embed entitlements with an ad-hoc codesign")
+    check("setup_signing_secrets.ps1" in read(ROOT / ".gitignore")
+          or "Scripts/.secrets/" in read(ROOT / ".gitignore"),
+          ".gitignore must exclude locally generated secret payloads")
+    for cli, pattern in (("github_build.py", r'"adhoc", "unsigned", "signed"'),
+                         ("push_to_github.ps1", r'"adhoc", "unsigned", "signed"')):
+        check(re.search(pattern, read(ROOT / "Scripts" / cli)) is not None,
+              f"{cli} must accept all three signing modes")
+
     for script in ("configure.sh", "build_ipa.sh", "verify_project.py", "github_build.py"):
         check((ROOT / "Scripts" / script).exists(), f"missing script Scripts/{script}")
 

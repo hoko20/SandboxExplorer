@@ -116,7 +116,7 @@ def main() -> int:
     parser.add_argument("--bundle-id", default="dev.local.SandboxExplorer")
     parser.add_argument("--app-group", default="group.dev.local.SandboxExplorer")
     parser.add_argument("--display-name", default="沙盒管家")
-    parser.add_argument("--sign-mode", choices=["unsigned", "signed"], default="unsigned")
+    parser.add_argument("--sign-mode", choices=["adhoc", "unsigned", "signed"], default="adhoc")
     parser.add_argument("--force-push", action="store_true")
     parser.add_argument("--verify-only", action="store_true", help="run the local validator and exit")
     args = parser.parse_args()
@@ -298,12 +298,18 @@ def main() -> int:
     with zipfile.ZipFile(io.BytesIO(blob)) as archive:
         for name in archive.namelist():
             if name.lower().endswith(".ipa") or name.endswith("build-report.txt") \
-               or name.endswith("SandboxExplorer.entitlements.plist"):
+               or name.endswith("SandboxExplorer.entitlements.plist") \
+               or name.endswith("SandboxExplorer.embedded-entitlements.plist") \
+               or name.endswith("xcodebuild.log"):
                 target = DIST / Path(name).name
                 target.write_bytes(archive.read(name))
                 extracted.append(target)
 
-    ipa = next((p for p in extracted if p.suffix == ".ipa"), None)
+    ipas = [p for p in extracted if p.suffix == ".ipa"]
+    # Prefer the IPA that already carries the entitlements.
+    ipa = (next((p for p in ipas if "-adhoc" in p.name), None)
+           or next((p for p in ipas if "-signed" in p.name), None)
+           or (ipas[0] if ipas else None))
     log("build succeeded")
     for path in extracted:
         log(f"  {path}  ({path.stat().st_size} bytes)")

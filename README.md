@@ -157,16 +157,19 @@ $env:GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxx"
 Python 版跨平台等价命令：
 
 ```bash
-python Scripts/github_build.py --repo SandboxExplorer --public --sign-mode unsigned
+python Scripts/github_build.py --repo SandboxExplorer --public --sign-mode adhoc
 ```
 
 脚本会自动：建仓 → 提交 → push 到 `main` → 等 Actions 跑完 → 下载并解压 IPA 到：
 
 ```
 C:\Users\Administrator\Desktop\trae测试\构建ipa\SandboxExplorer\dist\
-    SandboxExplorer-unsigned.ipa
+    SandboxExplorer-adhoc.ipa            <- App Group 已写进二进制签名
+    SandboxExplorer-unsigned.ipa         <- 干净未签名版，备用
     SandboxExplorer.entitlements.plist
+    SandboxExplorer.embedded-entitlements.plist   <- codesign 实际写入的内容
     build-report.txt
+    xcodebuild.log
     github-artifact.zip
 ```
 
@@ -207,44 +210,90 @@ bash Scripts/build_ipa.sh
 | `workflow_dispatch` | `bundle_id` | `dev.local.SandboxExplorer` | 必须与描述文件的 App ID 匹配 |
 | `workflow_dispatch` | `app_group` | `group.dev.local.SandboxExplorer` | **必须在描述文件中启用** |
 | `workflow_dispatch` | `display_name` | `沙盒管家` | 主屏幕名称 |
-| `workflow_dispatch` | `sign_mode` | `unsigned` | `unsigned` / `signed` |
+| `workflow_dispatch` | `sign_mode` | `adhoc` | `adhoc` / `unsigned` / `signed` |
 | `workflow_dispatch` | `xcode_path` | 空 | 指定 `/Applications/Xcode_27.2.app` 之类的路径 |
 | `Config/Project.xcconfig` | 三个标识 | 同上 | `configure.sh` 会统一改写它、entitlements 与 Info.plist |
 
-### 已签名模式（可选）
+### 4.1 能不能「构建时直接写入」，不用重签时手动合并？
 
-在仓库 **Settings → Secrets and variables → Actions** 添加：
+**能，而且默认就是这么做的。** 先说清机制：entitlement 不是 `.app` 里的一个文件，
+而是 **Mach-O 代码签名的一部分**。没有签名的二进制没有承载它的位置，所以
+把 plist 塞进 `.app` 资源目录也不会被 iOS 认可 —— 必须 `codesign`。
+因此工程提供三档，按「要不要证书」区分：
+
+| `sign_mode` | 构建时做了什么 | 产物 | 装到手机还要做什么 |
+|---|---|---|---|
+| **`adhoc`（默认）** | `xcodebuild` 不签名 → 复制一份 `.app` → `codesign --force --sign - --entitlements Config/SandboxExplorer.entitlements`。**零证书、零 Secrets**，App Group 直接写进二进制 | `SandboxExplorer-adhoc.ipa` **+** `SandboxExplorer-unsigned.ipa` | 普通非越狱 iOS：仍需 Sideloadly / AltStore 重签一次，但**不用再手动合并 XML**（工具会继承已存在的 entitlements）；TrollStore / 越狱设备可直接装 ad-hoc 版 |
+| **`signed`** | 用你自己的 p12 + 描述文件在 CI 里做真正的 Apple Development 签名 | `SandboxExplorer-signed.ipa` | **什么都不用做，直接安装**。这是真正的「一步到位」 |
+| `unsigned` | 完全不签名 | `SandboxExplorer-unsigned.ipa` | 重签并把 `dist/SandboxExplorer.entitlements.plist` 喂给工具 |
+
+`build_ipa.sh` 会用 `codesign -d --entitlements :-` **反向读回**签名内容，
+确认 `app_group` 字符串真的在里面，读不到就直接让构建失败；
+`dist/SandboxExplorer.embedded-entitlements.plist` 就是读回的原始内容。
+
+> ⚠️ **写入 ≠ 生效**：App Group 必须由 Apple 在描述文件里授权。ad-hoc 可以写进任意
+> entitlement，但普通 iOS 上 AMFI 仍会以描述文件为准；没有授权时
+> `containerURLForSecurityApplicationGroupIdentifier:` 返回 nil、容器访问返回 `-1`。
+> 自身沙盒的浏览 / 读取 / 写入不依赖它，任何情况下都可用。
+
+### 4.2 一键直接产出可安装 IPA（`sign_mode=signed`）
+
+前提：付费 Apple Developer 账号，且 App ID 已启用 **App Groups** 并包含
+`group.dev.local.SandboxExplorer`（或你自定义的 group）。
+
+1. 准备两个文件：从钥匙串导出的 `ios_dev.p12`（含私钥），以及在
+   https://developer.apple.com/account/resources/profiles 下载的开发/Ad Hoc
+   `.mobileprovision`（设备 UDID 要在里面）。
+2. 一条命令生成并写入 GitHub Secrets：
+
+```powershell
+cd "C:\Users\Administrator\Desktop\trae测试\构建ipa\SandboxExplorer"
+.\Scripts\setup_signing_secrets.ps1 `
+    -P12Path "C:\certs\ios_dev.p12" -P12Password "证书密码" `
+    -ProvisionPath "C:\certs\SandboxExplorer.mobileprovision" `
+    -TeamId "ABCDE12345" -Repo "hoko20/SandboxExplorer" -SetSecrets
+```
+
+脚本会先**检查描述文件里是否真的包含该 App Group**（不含就直接报错，避免产出
+「看起来签好了但功能全废」的 IPA），校验 Team ID，把 5 个 Secret 写入仓库：
 
 | Secret | 内容 |
 |---|---|
-| `IOS_P12_BASE64` | `.p12` 证书的 base64 |
+| `IOS_P12_BASE64` | `.p12` 的 base64 |
 | `IOS_P12_PASSWORD` | 证书密码 |
 | `IOS_PROVISION_PROFILE_BASE64` | `.mobileprovision` 的 base64 |
 | `IOS_TEAM_ID` | Team ID |
-| `KEYCHAIN_PASSWORD` | 任意随机串（CI 临时钥匙串密码） |
+| `KEYCHAIN_PASSWORD` | 脚本自动生成的随机串 |
 
-生成 base64：
+不加 `-SetSecrets` 时只把 base64 写到 `Scripts/.secrets/*.txt`（已被 `.gitignore`
+排除），供你在 **Settings → Secrets and variables → Actions** 手动粘贴。
 
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\cert.p12")) | Set-Clipboard
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\profile.mobileprovision")) | Set-Clipboard
-```
+3. 到 **Actions → Build SandboxExplorer IPA → Run workflow**，选 `sign_mode = signed`
+   并确认 `bundle_id` / `app_group` 与描述文件完全一致。CI 会建临时钥匙串、
+   导入证书、安装描述文件、`CODE_SIGN_STYLE=Manual` 构建，产出
+   `SandboxExplorer-signed.ipa`，**无需重签**。
 
-工作流会导入钥匙串、安装描述文件、用 `CODE_SIGN_STYLE=Manual` 构建并产出
-`SandboxExplorer-signed.ipa`。
+> 免费 Apple ID 的 7 天个人签名**无法在 GitHub Actions 里自动完成**：runner 是每次
+> 全新的机器，Xcode 账号登录要走交互式 2FA，且免费账号不允许 App Groups。
+> 免费账号只能走本地 Sideloadly / AltStore，或直接装 `adhoc` 版 + TrollStore。
 
 ---
 
 ## 5. 签名与侧载（决定功能能否用，务必读）
 
-- `unsigned` IPA **不能直接安装**，需要用 Sideloadly / AltStore / iOS App Signer /
-  爱思助手等用自己的证书重签。产物里的 `SandboxExplorer.entitlements.plist`
-  就是给重签工具用的，必须保留其中：
+- 默认产物是 **`adhoc`**：entitlements 已在构建时写进二进制，重签工具会继承，
+  **不需要手动合并 XML**。若仍想显式指定，Sideloadly 的
+  *Advanced options → Entitlements* 里选 `dist/SandboxExplorer.entitlements.plist`
+  即可；该文件内容为：
 
   ```xml
   <key>com.apple.security.application-groups</key>
   <array><string>group.dev.local.SandboxExplorer</string></array>
   ```
+
+- `unsigned` IPA **不能直接安装**，需要用 Sideloadly / AltStore / iOS App Signer /
+  爱思助手等用自己的证书重签，并把上面的 plist 喂给工具。
+- `signed` IPA 由 CI 用真实证书签好，直接安装，无需任何重签。
 
 - **App Group 需要付费 Apple Developer 账号**。免费账号的 7 天签名不支持
   App Groups，`containerURLForSecurityApplicationGroupIdentifier:` 会返回 nil，
@@ -285,7 +334,8 @@ SandboxExplorer/
 │   └── SandboxExplorer.entitlements.template
 ├── Scripts/
 │   ├── configure.sh                      统一改写三个标识
-│   ├── build_ipa.sh                      xcodebuild + Payload 打包 + 校验 + 报告
+│   ├── build_ipa.sh                      xcodebuild + (ad-hoc/正式)签名 + 打包 + 校验 + 报告
+│   ├── setup_signing_secrets.ps1         把 p12/描述文件一键写成 GitHub Secrets
 │   ├── verify_project.py                 Windows 本机可跑的工程静态校验
 │   ├── github_build.py                   建仓/推送/轮询/下载 IPA 一键脚本
 │   └── push_to_github.ps1                PowerShell 薄封装
@@ -308,6 +358,6 @@ SandboxExplorer/
 GPL-3.0-or-later。分发 IPA 时必须同时提供完整对应源码、保留 `LICENSE`、
 `THIRD_PARTY_NOTICES.md` 以及 App 内「工具 → 技术与上游声明」页面。
 
-本项目与 Apple 无关，也不适用于越狱环境；它利用的是 stock iOS 上的
-App Group 容器查询行为。对其它 App 数据的写入会直接改动目标 App 的内容，
-操作前请自行确认目标路径。
+本项目与 Apple 无关；主路径利用的是 stock iOS 上的 App Group 容器查询行为，
+`adhoc` 产物也可在 TrollStore / 越狱环境直接安装。对其它 App 数据的写入会
+直接改动目标 App 的内容，操作前请自行确认目标路径。

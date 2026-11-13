@@ -21,8 +21,8 @@ param(
     [string]$BundleId = "dev.local.SandboxExplorer",
     [string]$AppGroup = "group.dev.local.SandboxExplorer",
     [string]$DisplayName = "沙盒管家",
-    [ValidateSet("unsigned", "signed")]
-    [string]$SignMode = "unsigned"
+    [ValidateSet("adhoc", "unsigned", "signed")]
+    [string]$SignMode = "adhoc"
 )
 
 $ErrorActionPreference = "Stop"

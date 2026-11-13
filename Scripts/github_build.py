@@ -100,7 +100,8 @@ def main() -> int:
 
     if not args.token:
         log("ERROR: no GitHub token. Set GITHUB_TOKEN or pass --token.")
-        log("       Create one at https://github.com/settings/tokens with the 'repo' scope.")
+        log("       Create one at https://github.com/settings/tokens with the")
+        log("       'repo' and 'workflow' scopes (workflow is needed to push .yml files).")
         return 2
 
     token = args.token.strip()

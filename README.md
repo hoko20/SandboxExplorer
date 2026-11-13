@@ -68,7 +68,8 @@ worse_query 技术（iOS 26+ 与可用 App Group）。
 
 ### 方式 A — 一键脚本（建仓 → 推送 → 触发 → 下载 IPA）
 
-1. 在 https://github.com/settings/tokens 生成一个带 `repo` 权限的 token。
+1. 在 https://github.com/settings/tokens 生成一个带 `repo` **和 `workflow`** 权限的
+   token（推送 `.github/workflows/*.yml` 需要 `workflow` 权限）。
 2. 在 PowerShell 中执行：
 
 ```powershell

@@ -3,8 +3,9 @@
 #   $env:GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxx"
 #   .\Scripts\push_to_github.ps1 -Repo SandboxExplorer
 #
-# The token needs the classic "repo" scope (or fine-grained Contents:
-# read/write + Actions: read/write + Administration: read/write for repo creation).
+# The token needs the classic "repo" AND "workflow" scopes (or fine-grained
+# Contents: read/write + Workflows: read/write + Actions: read/write +
+# Administration: read/write for repo creation).
 
 param(
     [string]$Repo = "SandboxExplorer",

@@ -61,6 +61,20 @@ def main() -> int:
     check(not dangling, f"pbxproj references undefined object ids: {sorted(dangling)}")
     check(len(definitions) >= 40, f"pbxproj looks truncated ({len(definitions)} objects)")
 
+    # OpenStep-plist structural sanity: braces, semicolons, object count.
+    structural = pbx
+    structural = re.sub(r"/\*.*?\*/", "", structural, flags=re.S)
+    structural = re.sub(r"//[^\n]*", "", structural)
+    structural = re.sub(r'"(?:\\.|[^"\\])*"', '""', structural)
+    check(structural.count("{") == structural.count("}"),
+          f"pbxproj braces unbalanced ({structural.count('{')} vs {structural.count('}')})")
+    check(pbx.count("isa = ") >= 40, "pbxproj is missing object definitions")
+    for required_section in ("PBXBuildFile", "PBXFileReference", "PBXGroup",
+                             "PBXNativeTarget", "PBXProject", "PBXSourcesBuildPhase",
+                             "XCBuildConfiguration", "XCConfigurationList"):
+        check(f"/* Begin {required_section} section */" in pbx,
+              f"pbxproj missing {required_section} section")
+
     # Every source file on disk must be listed in the project and in Sources.
     disk_sources = sorted(p.name for p in SOURCES.glob("*.m"))
     listed_sources = sorted(set(re.findall(r"path = ([\w-]+\.m);", pbx)))

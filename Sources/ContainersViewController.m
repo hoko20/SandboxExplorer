@@ -274,7 +274,7 @@
 - (void)openContainer:(NSString *)path
 {
     __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_USER_INITIATED, 0), ^{
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         NSString *error = nil;
         BOOL ok = WQEnsure(path, &error);
         dispatch_async(dispatch_get_main_queue(), ^{

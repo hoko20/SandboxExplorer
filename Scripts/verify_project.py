@@ -150,6 +150,31 @@ def main() -> int:
     missing = sorted(name for name in declared if f"{name}(" not in all_impl)
     check(not missing, f"declared but not implemented: {missing}")
 
+    # Clang rejects C arrays captured by a block and rejects invented priority
+    # constants. Both mistakes only show up on a real macOS runner, so catch
+    # them here before spending an Actions build.
+    valid_priorities = {
+        "DISPATCH_QUEUE_PRIORITY_HIGH",
+        "DISPATCH_QUEUE_PRIORITY_DEFAULT",
+        "DISPATCH_QUEUE_PRIORITY_LOW",
+        "DISPATCH_QUEUE_PRIORITY_BACKGROUND",
+    }
+    used_priorities = set(re.findall(r"\b(DISPATCH_QUEUE_PRIORITY_[A-Z_]+)\b", all_impl))
+    check(not (used_priorities - valid_priorities),
+          f"invalid dispatch priority constants: {sorted(used_priorities - valid_priorities)}")
+
+    array_decl = re.compile(
+        r"\b(?:char|uint8_t|unsigned char|int|uint64_t|size_t)\s+(\w+)\s*\[")
+    for src in sorted(SOURCES.glob("*.m")):
+        text = read(src)
+        if "dispatch_apply" not in text:
+            continue
+        head, body = text.split("dispatch_apply", 1)
+        captured = [name for name in array_decl.findall(head)
+                    if re.search(r"\b" + re.escape(name) + r"\b", body)]
+        check(not captured,
+              f"{src.name}: C array(s) {captured} captured by a block; use heap allocation")
+
     print(f"verify_project: {checks} checks")
     if errors:
         for error in errors:

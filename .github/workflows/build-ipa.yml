@@ -38,7 +38,9 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  # write is only used by the failure-log fallback, which pushes the build log
+  # to the orphan `ci-logs` branch so it can be read without a PAT.
+  contents: write
 
 jobs:
   build-ipa:
@@ -94,7 +96,28 @@ jobs:
           RUNNER_TEMP: ${{ runner.temp }}
         run: bash Scripts/build_ipa.sh
 
+      - name: Publish build log on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LOG="$GITHUB_WORKSPACE/dist/xcodebuild.log"
+          [[ -f "$LOG" ]] || exit 0
+          TMP="$(mktemp -d)"
+          cd "$TMP"
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tail -n 5000 "$LOG" > xcodebuild.log
+          git add xcodebuild.log
+          git commit -q -m "CI log: run ${{ github.run_number }} / ${{ github.sha }}"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git push -q -f origin HEAD:refs/heads/ci-logs
+          echo "build log published to branch ci-logs"
+
       - name: Upload IPA, entitlements and build report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: SandboxExplorer-IPA-${{ github.run_number }}
@@ -103,10 +126,11 @@ jobs:
             dist/SandboxExplorer.entitlements.plist
             dist/build-report.txt
             dist/xcodebuild.log
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Summary
+        if: success()
         run: |
           {
             echo "### SandboxExplorer IPA"

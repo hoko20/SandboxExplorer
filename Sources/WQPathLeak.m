@@ -113,13 +113,23 @@ NSArray<NSString *> *WQEnumerateChildren(
     // Keep only the address; never spell the private fsid_t typedef.
     void *fsidPtr = &sfs.f_fsid;
 
-    char prefix[PATH_MAX];
-    if (![dir getFileSystemRepresentation:prefix maxLength:sizeof(prefix)]) return nil;
+    // A C array declared outside a block cannot be captured by a block
+    // ("cannot refer to declaration with an array type inside block"). Keep the
+    // prefix on the heap and pass a plain pointer into the dispatch_apply block.
+    char *prefix = (char *)calloc(PATH_MAX, 1);
+    if (!prefix) return nil;
+    if (![dir getFileSystemRepresentation:prefix maxLength:PATH_MAX]) {
+        free(prefix);
+        return nil;
+    }
     size_t prefixLength = strlen(prefix);
     if (prefixLength == 1 && prefix[0] == '/') prefixLength = 0;
 
     uint64_t lastId = maxInode ?: WQProbeMaxInode();
-    if (lastId < 1) return @[];
+    if (lastId < 1) {
+        free(prefix);
+        return @[];
+    }
     uint64_t total = lastId;
 
     const uint64_t chunk = 32768;
@@ -174,6 +184,9 @@ NSArray<NSString *> *WQEnumerateChildren(
             if (progress) progress(doneNow, total, count);
         }
     });
+
+    free(prefix);
+    prefix = NULL;
 
     if (cancelled && cancelled()) {
         WQLog(@"enumerate %@: cancelled after %lu hits", dir, (unsigned long)found.count);

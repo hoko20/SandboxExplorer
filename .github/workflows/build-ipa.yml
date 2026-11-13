@@ -1,0 +1,119 @@
+name: Build SandboxExplorer IPA
+
+# macOS 26 runners ship Xcode 26.6 + iOS 26.5 SDK (Xcode 27 preview is also
+# available in newer images). If your account does not offer macos-26, change
+# runs-on to the newest macOS label that has an iOS 26 SDK.
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: 'Bundle ID (must match your provisioning profile)'
+        required: false
+        default: 'dev.local.SandboxExplorer'
+      app_group:
+        description: 'App Group ID (must be in the provisioning profile)'
+        required: false
+        default: 'group.dev.local.SandboxExplorer'
+      display_name:
+        description: 'App display name'
+        required: false
+        default: '沙盒管家'
+      sign_mode:
+        description: 'unsigned = re-sign locally; signed = use the iOS signing secrets'
+        required: true
+        default: 'unsigned'
+        type: choice
+        options:
+          - unsigned
+          - signed
+      xcode_path:
+        description: 'Optional absolute Xcode path, e.g. /Applications/Xcode_27.2.app'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    name: Build .ipa on macOS
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Static project validation
+        run: python3 Scripts/verify_project.py
+
+      - name: Select Xcode and show SDKs
+        run: |
+          set -euo pipefail
+          XCODE_PATH="${{ inputs.xcode_path }}"
+          if [[ -n "$XCODE_PATH" ]]; then
+            echo "Selecting $XCODE_PATH"
+            sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          else
+            echo "Using runner default: $(xcode-select -p)"
+          fi
+          xcodebuild -version
+          SDK="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "iphoneos SDK = $SDK"
+          if [[ "${SDK%%.*}" -lt 26 ]]; then
+            echo "::warning::This image has iOS SDK $SDK. The project still compiles, but container access needs iOS 26+ at runtime."
+          fi
+          xcodebuild -showsdks | grep -E 'iOS|iphoneos' || true
+
+      - name: Configure bundle ID / App Group / display name
+        run: |
+          bash Scripts/configure.sh \
+            --bundle-id    "${{ inputs.bundle_id || 'dev.local.SandboxExplorer' }}" \
+            --app-group    "${{ inputs.app_group || 'group.dev.local.SandboxExplorer' }}" \
+            --display-name "${{ inputs.display_name || 'SandboxExplorer' }}"
+          echo "--- entitlements ---"
+          cat Config/SandboxExplorer.entitlements
+
+      - name: Build and package IPA
+        env:
+          SIGN_MODE: ${{ inputs.sign_mode || 'unsigned' }}
+          BUNDLE_ID: ${{ inputs.bundle_id || 'dev.local.SandboxExplorer' }}
+          APP_GROUP_ID: ${{ inputs.app_group || 'group.dev.local.SandboxExplorer' }}
+          DISPLAY_NAME: ${{ inputs.display_name || 'SandboxExplorer' }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: bash Scripts/build_ipa.sh
+
+      - name: Upload IPA, entitlements and build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: SandboxExplorer-IPA-${{ github.run_number }}
+          path: |
+            dist/SandboxExplorer-*.ipa
+            dist/SandboxExplorer.entitlements.plist
+            dist/build-report.txt
+            dist/xcodebuild.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          {
+            echo "### SandboxExplorer IPA"
+            echo ""
+            cat dist/build-report.txt | sed 's/^/    /'
+            echo ""
+            echo "Download the artifact \`SandboxExplorer-IPA-${{ github.run_number }}\`."
+            echo "For unsigned builds: re-sign with Sideloadly / AltStore / iOS App Signer,"
+            echo "keeping \`com.apple.security.application-groups\` from"
+            echo "\`SandboxExplorer.entitlements.plist\` in the new signature."
+          } >> "$GITHUB_STEP_SUMMARY"

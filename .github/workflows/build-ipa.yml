@@ -1,8 +1,9 @@
 name: Build SandboxExplorer IPA
 
-# macOS 26 runners ship Xcode 26.6 + iOS 26.5 SDK (Xcode 27 preview is also
-# available in newer images). If your account does not offer macos-26, change
-# runs-on to the newest macOS label that has an iOS 26 SDK.
+# macOS 26 runners ship Xcode 26.6 + iOS 26.5 SDK. GitHub also offers the
+# `xcode-27` label (macOS 26 arm64 + Xcode 27) if you want the newer toolchain;
+# this project builds on either. If your account does not offer macos-26,
+# change runs-on to the newest macOS label that has an iOS 26 SDK.
 on:
   push:
     branches: [main, master]

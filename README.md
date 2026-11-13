@@ -64,23 +64,103 @@ worse_query 技术（iOS 26+ 与可用 App Group）。
 
 ## 3. 用 GitHub 构建 IPA（Windows 推荐）
 
+**为什么必须走 GitHub**：Windows 没有 Xcode，无法编译 iOS 应用。GitHub 提供 macOS
+云主机构建机（免费），把工程 push 上去后 `.github/workflows/build-ipa.yml` 会自动
+编译、打包 IPA 并作为 artifact 上传。你只需要解决「怎么把代码推上去」这一步的身份认证。
+
 工程根目录：`C:\Users\Administrator\Desktop\trae测试\构建ipa\SandboxExplorer\`
 
-### 方式 A — 一键脚本（建仓 → 推送 → 触发 → 下载 IPA）
+### 3.1 三种认证方式，任选一种
 
-1. 在 https://github.com/settings/tokens 生成一个带 `repo` **和 `workflow`** 权限的
-   token（推送 `.github/workflows/*.yml` 需要 `workflow` 权限）。
-2. 在 PowerShell 中执行：
+#### 方式 1（最省事，强烈推荐）：GitHub CLI 浏览器登录，完全不用手动造 token
+
+```powershell
+winget install --id GitHub.cli          # 装完后重开一个 PowerShell 窗口
+gh auth login --scopes "repo,workflow"
+```
+
+交互过程：选 `GitHub.com` → `HTTPS` → `Login with a web browser` →
+终端显示一次性码（如 `ABCD-1234`）→ 复制 → 自动打开的浏览器里粘贴并点授权 → 回到终端回车。
+
+若后续 push 提示缺 workflow 权限，补一次：
+
+```powershell
+gh auth refresh -h github.com -s workflow
+```
+
+脚本会自动执行 `gh auth token` 取凭据，**不需要把任何 token 贴到命令行或对话里**。
+
+#### 方式 2：手动创建 classic PAT（`ghp_` 开头的字符串）
+
+1. 浏览器登录 https://github.com ，右上角头像 → **Settings**。
+2. 左侧栏拉到最底 → **Developer settings**。
+3. **Personal access tokens** → **Tokens (classic)**。
+4. **Generate new token** → **Generate new token (classic)**
+   （也可直达 https://github.com/settings/tokens/new ，可能要求再输一次密码/2FA）。
+5. **Note** 填 `SandboxExplorer-Build`；**Expiration** 选 `30 days`（够用，别选 No expiration）。
+6. 勾选**且只勾**这两项：
+   - ✅ `repo`（第一组整项，Full control of private repositories）
+   - ✅ `workflow`（单独一行，允许创建/更新 `.github/workflows/*.yml`）
+7. 点 **Generate token** → **立刻复制 `ghp_` 开头的整串字符**（页面刷新后不再显示）。
+
+> `workflow` 不能漏：本工程的构建脚本本身就是一个 workflow 文件。缺它时 push 会报
+> `refusing to allow a Personal Access Token to create or update workflow .github/workflows/build-ipa.yml without workflow scope`。
+>
+> fine-grained PAT 也可以，但创建仓库需要额外给 `Administration: read/write`，
+> 且容易出现权限缺失，新手建议直接用 classic PAT。
+
+#### 方式 3：完全不用 token，网页建仓 + Git 凭据管理器（浏览器登录）
+
+本机 PortableGit 自带 `git-credential-manager.exe`，`git push` 会弹出 GitHub 登录窗。
+
+1. 打开 https://github.com/new ，仓库名 `SandboxExplorer`，选 **Public**，
+   **不要**勾选 Add README / .gitignore / license（保持全空）。
+2. 本地执行（把 `<you>` 换成你的用户名）：
 
 ```powershell
 cd "C:\Users\Administrator\Desktop\trae测试\构建ipa\SandboxExplorer"
-$env:GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxx"
-python Scripts\verify_project.py          # 本地静态校验，无 Xcode 也能跑
-.\Scripts\push_to_github.ps1 -Repo SandboxExplorer
+git remote add origin https://github.com/<you>/SandboxExplorer.git
+git push -u origin main
 ```
 
-脚本会自动创建私有仓库、提交代码、push 到 `main`、等待 Actions 完成，
-并把产物解压到：
+3. 弹窗里选浏览器登录并授权。
+4. 打开 `https://github.com/<you>/SandboxExplorer/actions` 看构建，
+   跑完后进那次 run → 页面底部 **Artifacts** → 下载 `SandboxExplorer-IPA-*`，
+   解压出里面的 `.ipa`。
+
+缺点：不能自动下载产物、不能从命令行改 Bundle ID 等参数。
+
+### 3.2 建议把仓库设为 Public
+
+本工程是 GPL-3.0-or-later，源码本来就要公开。公开仓库的 GitHub Actions **免费且不受
+macOS 分钟倍率限制**；私有仓库的免费账号每月只有约 `$12` 计算额度，
+macOS runner 按约 `$0.062/分钟` 扣（约 190 分钟），用尽后需要绑定支付方式。
+一键脚本加 `-Public` 即建公开仓库（不加默认私有）。
+
+### 3.3 一键构建命令
+
+按上面选好认证后，在 **PowerShell** 执行：
+
+```powershell
+cd "C:\Users\Administrator\Desktop\trae测试\构建ipa\SandboxExplorer"
+python Scripts\verify_project.py        # 本地静态校验，无需 Xcode
+
+# 方式 1（gh CLI 已登录）—— 什么都不用设：
+.\Scripts\push_to_github.ps1 -Repo SandboxExplorer -Public
+
+# 方式 2（用了 PAT）—— 先设环境变量再跑：
+$env:GITHUB_TOKEN = "ghp_xxxxxxxxxxxxxxxxxxxx"
+.\Scripts\push_to_github.ps1 -Repo SandboxExplorer -Public
+```
+
+`$env:GITHUB_TOKEN` 只在当前 PowerShell 窗口有效，关掉窗口即失效，不会写进文件。
+Python 版跨平台等价命令：
+
+```bash
+python Scripts/github_build.py --repo SandboxExplorer --public --sign-mode unsigned
+```
+
+脚本会自动：建仓 → 提交 → push 到 `main` → 等 Actions 跑完 → 下载并解压 IPA 到：
 
 ```
 C:\Users\Administrator\Desktop\trae测试\构建ipa\SandboxExplorer\dist\
@@ -90,26 +170,23 @@ C:\Users\Administrator\Desktop\trae测试\构建ipa\SandboxExplorer\dist\
     github-artifact.zip
 ```
 
-也可以直接调用 Python 版（跨平台）：
+构建一般 5–15 分钟。想看实时日志：仓库 **Actions → Build SandboxExplorer IPA**。
+想改配置再构建：**Actions → Build SandboxExplorer IPA → Run workflow**，
+页面可直接填 `bundle_id / app_group / display_name / sign_mode / xcode_path`。
+`-NoWait` 只推送不等待，`-TimeoutMinutes 60` 可延长等待。
 
-```bash
-python Scripts/github_build.py --repo SandboxExplorer --sign-mode unsigned
-```
+### 3.4 常见报错
 
-### 方式 B — 手动推送
+| 现象 | 原因 / 处理 |
+|---|---|
+| `Bad credentials` / `401` | token 复制不全或已过期，重新生成；`gh` 用户执行 `gh auth login` |
+| `refusing to allow ... without workflow scope` | 缺 `workflow` scope：classic PAT 重勾；或 `gh auth refresh -h github.com -s workflow` |
+| `Resource not accessible by integration` / `403` | fine-grained PAT 少给了 Administration / Actions 权限，改用 classic PAT |
+| `Repository creation failed (422)` | 仓库名已存在，脚本会直接复用；换个 `-Repo` 名字也可 |
+| 推送成功但没有 Actions 运行 | 私有仓库需 **Settings → Actions → General** 允许 workflow；或 `workflow` scope 缺失导致 yml 未上传 |
+| `No space` / macOS 排队久 | 公开仓库优先；macOS runner 高峰期可能排队，等几分钟即可 |
 
-```bash
-git init -b main
-git add .
-git commit -m "Build SandboxExplorer IPA"
-git remote add origin https://github.com/<you>/SandboxExplorer.git
-git push -u origin main
-```
-
-进入仓库 **Actions → Build SandboxExplorer IPA → 下载 `SandboxExplorer-IPA-*`**。
-`workflow_dispatch` 还可以在页面上直接改 Bundle ID / App Group / 显示名 / 签名模式。
-
-### 方式 C — 本地 macOS 构建（需要 Xcode 26+）
+### 3.5 本地 macOS 构建（需要 Xcode 26+）
 
 ```bash
 bash Scripts/configure.sh \

@@ -79,6 +79,32 @@ def log(message: str) -> None:
     print(f"[github-build] {message}", flush=True)
 
 
+def token_from_gh_cli() -> str:
+    """Reuse the OAuth token cached by `gh auth login` (no manual PAT needed)."""
+    for exe in ("gh", "gh.exe"):
+        try:
+            proc = subprocess.run([exe, "auth", "token"],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  text=True, timeout=20)
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        value = (proc.stdout or "").strip()
+        if proc.returncode == 0 and value:
+            return value
+    return ""
+
+
+def resolve_token(explicit: str) -> str:
+    token = (explicit or "").strip()
+    if token:
+        return token
+    token = token_from_gh_cli()
+    if token:
+        log("using the token from `gh auth token` (GitHub CLI login)")
+        return token
+    return ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build SandboxExplorer.ipa with GitHub Actions")
     parser.add_argument("--repo", default="SandboxExplorer", help="GitHub repository name")
@@ -98,10 +124,15 @@ def main() -> int:
     if args.verify_only:
         return subprocess.call([sys.executable, str(ROOT / "Scripts" / "verify_project.py")])
 
+    args.token = resolve_token(args.token)
     if not args.token:
-        log("ERROR: no GitHub token. Set GITHUB_TOKEN or pass --token.")
-        log("       Create one at https://github.com/settings/tokens with the")
-        log("       'repo' and 'workflow' scopes (workflow is needed to push .yml files).")
+        log("ERROR: no GitHub credentials. Pick one of these:")
+        log("  A) set GITHUB_TOKEN / --token with a classic PAT (scopes: repo + workflow)")
+        log("     create it at https://github.com/settings/tokens/new")
+        log("  B) install GitHub CLI and run: gh auth login --scopes 'repo,workflow'")
+        log("     this script then reads `gh auth token` automatically")
+        log("  C) push manually (Git Credential Manager browser login) and download")
+        log("     the IPA from the repository's Actions page")
         return 2
 
     token = args.token.strip()
@@ -160,6 +191,10 @@ def main() -> int:
     code, out = run_git(push_args)
     if code != 0:
         log(f"ERROR: git push failed: {out}")
+        if "workflow" in out.lower() or "refusing to allow" in out.lower():
+            log("       The token lacks the 'workflow' scope (needed to push .yml files).")
+            log("       classic PAT: regenerate with workflow checked;")
+            log("       GitHub CLI:  gh auth refresh -h github.com -s workflow")
         log("       Try --force-push if the remote has an unrelated history.")
         return 2
     log("pushed to main")
